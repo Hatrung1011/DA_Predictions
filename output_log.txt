@@ -1,0 +1,36 @@
+﻿python : Traceback (most recent call last):
+At line:1 char:1
++ python main.py 2>&1 | Out-File -Encoding utf8 
+output_log.txt; Get-Con ...
++ ~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Tra 
+   ceback (most recent call last)::String) [],   
+  RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "D:\Workspace\DA\main.py", line 847, in 
+<module>
+    main()
+    ~~~~^^
+  File "D:\Workspace\DA\main.py", line 824, in 
+main
+    print("\u2554\u2550\u2550\u2550\u2550\u2550\u
+2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2
+550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u25
+50\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255
+0\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\
+u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u
+2557")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Python\pytho
+ncore-3.14-64\Lib\encodings\cp1252.py", line 19, 
+in encode
+    return codecs.charmap_encode(input,self.error
+s,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode 
+characters in position 0-55: character maps to 
+<undefined>
