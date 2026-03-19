@@ -749,6 +749,11 @@ def predict_2026(results, best_model_name, monthly, df):
         df, predictions_qty[:12], predictions_rev[:12]
     )
 
+    # Customer × Material monthly predictions
+    cust_mat_monthly = _predict_customer_material_monthly(
+        df, predictions_qty[:12]
+    )
+
     with pd.ExcelWriter(excel_path, engine='xlsxwriter') as writer:
         # Write raw data first (will be overwritten with formatting)
         pred_df.to_excel(writer, sheet_name='Monthly Predictions', index=False)
@@ -756,6 +761,7 @@ def predict_2026(results, best_model_name, monthly, df):
         mat_pred.to_excel(writer, sheet_name='Material Breakdown', index=False)
         cust_monthly_qty.to_excel(writer, sheet_name='Customer Monthly Qty', index=False)
         cust_monthly_rev.to_excel(writer, sheet_name='Customer Monthly Rev', index=False)
+        cust_mat_monthly.to_excel(writer, sheet_name='Customer-Material Monthly', index=False)
 
         wb = writer.book
 
@@ -1005,11 +1011,50 @@ def predict_2026(results, best_model_name, monthly, df):
                 ws.write_number(tr, c, float(col_sum), fmt_total_num)
             ws.set_row(tr, 24)
 
+        # =============================================
+        # Sheet 6: Customer-Material Monthly
+        # =============================================
+        ws6 = writer.sheets['Customer-Material Monthly']
+        ws6.freeze_panes(1, 2)  # freeze header + Customer/Material cols
+        ws6.set_tab_color('#ff6b9d')
+
+        cm_cols = list(cust_mat_monthly.columns)
+        for c, col_name in enumerate(cm_cols):
+            ws6.write(0, c, col_name, fmt_header)
+            if c == 0:
+                ws6.set_column(c, c, 30)  # Customer
+            elif c == 1:
+                ws6.set_column(c, c, 28)  # Material
+            else:
+                ws6.set_column(c, c, 14)  # Month/Total
+        ws6.set_row(0, 30)
+
+        for r in range(len(cust_mat_monthly)):
+            is_alt = r % 2 == 1
+            ws6.write(r + 1, 0, str(cust_mat_monthly.iloc[r][cm_cols[0]]),
+                      fmt_text_alt if is_alt else fmt_text)
+            ws6.write(r + 1, 1, str(cust_mat_monthly.iloc[r][cm_cols[1]]),
+                      fmt_text_alt if is_alt else fmt_text)
+            for c in range(2, len(cm_cols)):
+                val = cust_mat_monthly.iloc[r][cm_cols[c]]
+                ws6.write_number(r + 1, c, float(val),
+                                fmt_num_alt if is_alt else fmt_num)
+
+        # Total row
+        tr6 = len(cust_mat_monthly) + 1
+        ws6.write(tr6, 0, 'TOTAL', fmt_total_label)
+        ws6.write(tr6, 1, '', fmt_total_label)
+        for c in range(2, len(cm_cols)):
+            col_sum = cust_mat_monthly[cm_cols[c]].sum()
+            ws6.write_number(tr6, c, float(col_sum), fmt_total_num)
+        ws6.set_row(tr6, 24)
+
     print(f"  [OK] Predictions saved: {excel_path}")
 
     # Prediction chart
     _chart_predictions(monthly, future_dates, predictions_qty, predictions_rev, best_model_name)
     _chart_customer_forecast(df, predictions_qty)
+    _chart_customer_material_heatmap(cust_mat_monthly)
 
     return pred_df
 
@@ -1394,6 +1439,73 @@ def _predict_customer_monthly(df, predictions_qty, predictions_rev):
     return pd.DataFrame(qty_rows), pd.DataFrame(rev_rows)
 
 
+def _predict_customer_material_monthly(df, predictions_qty):
+    """Predict per-customer per-material monthly Qty for 2026.
+
+    For each top customer, identifies their top materials and distributes
+    the overall monthly predictions using historical (customer, material, month)
+    share patterns from 2024-2025.
+
+    Returns DataFrame with columns:
+        Customer | Material | 2026-01 | ... | 2026-12 | Total 2026
+    """
+    recent = df[df['year'] >= 2024]
+    top_customers = (recent.groupby('Customer name')['Delivery qty.']
+                     .sum().nlargest(15).index.tolist())
+
+    # All-customer monthly totals (denominator for share calc)
+    all_month = recent.groupby('month_num').agg(
+        total_qty=('Delivery qty.', 'sum'),
+    ).reset_index()
+
+    months = list(range(1, 13))
+    month_labels = [f'2026-{m:02d}' for m in months]
+    TOP_MATERIALS_PER_CUSTOMER = 10
+
+    rows = []
+
+    for cust in top_customers:
+        cust_data = recent[recent['Customer name'] == cust]
+
+        # Top materials for this customer
+        top_materials = (cust_data.groupby('Material name')['Delivery qty.']
+                         .sum().nlargest(TOP_MATERIALS_PER_CUSTOMER).index.tolist())
+
+        for mat in top_materials:
+            row = {'Customer': cust, 'Material': mat}
+            annual_qty = 0.0
+
+            for m in months:
+                # Get (customer, material, month) qty from history
+                cm_data = cust_data[
+                    (cust_data['Material name'] == mat) &
+                    (cust_data['month_num'] == m)
+                ]['Delivery qty.'].sum()
+
+                # Get total all-customer qty for this month
+                am = all_month[all_month['month_num'] == m]
+                total_m = am['total_qty'].values[0] if len(am) > 0 else 1
+
+                # Share = this (cust, mat, month) / all customers total for month
+                share = cm_data / max(total_m, 1)
+
+                pred_q = predictions_qty[m - 1] * share
+                row[month_labels[m - 1]] = round(pred_q)
+                annual_qty += pred_q
+
+            row['Total 2026'] = round(annual_qty)
+            # Only include rows with non-zero prediction
+            if annual_qty > 0:
+                rows.append(row)
+
+    result_df = pd.DataFrame(rows)
+    # Sort by Total 2026 descending
+    if len(result_df) > 0:
+        result_df = result_df.sort_values('Total 2026', ascending=False).reset_index(drop=True)
+
+    return result_df
+
+
 def _chart_predictions(monthly, future_dates, preds_qty, preds_rev, model_name):
     """Chart historical + 2026 prediction."""
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
@@ -1472,6 +1584,49 @@ def _chart_customer_forecast(df, total_preds):
     fig.savefig(os.path.join(CHARTS_DIR, '09_customer_forecast_2026.png'), dpi=150)
     plt.close(fig)
     print("  → 09_customer_forecast_2026.png")
+
+
+def _chart_customer_material_heatmap(cust_mat_df):
+    """Heatmap: top customers × top materials predicted 2026 qty."""
+    if len(cust_mat_df) == 0:
+        print("  [!] No customer-material data for heatmap")
+        return
+
+    # Aggregate to customer × material totals
+    pivot = cust_mat_df.pivot_table(
+        index='Customer', columns='Material',
+        values='Total 2026', aggfunc='sum', fill_value=0
+    )
+
+    # Keep top 10 customers and top 10 materials by total
+    top_custs = pivot.sum(axis=1).nlargest(10).index
+    top_mats = pivot.sum(axis=0).nlargest(10).index
+    pivot = pivot.loc[
+        pivot.index.isin(top_custs),
+        pivot.columns.isin(top_mats)
+    ]
+
+    # Shorten labels
+    pivot.index = [n[:35] for n in pivot.index]
+    pivot.columns = [n[:25] for n in pivot.columns]
+
+    fig, ax = plt.subplots(figsize=(16, 8))
+    sns.heatmap(
+        pivot / 1e6, annot=True, fmt='.1f', cmap='magma_r',
+        linewidths=0.5, linecolor='#2a2a4a',
+        cbar_kws={'label': 'Predicted Qty (M)'},
+        ax=ax
+    )
+    ax.set_title('2026 Predicted Delivery Qty: Customer × Material (Millions)',
+                 fontweight='bold', pad=15)
+    ax.set_xlabel('Material')
+    ax.set_ylabel('Customer')
+    plt.xticks(rotation=45, ha='right', fontsize=8)
+    plt.yticks(fontsize=9)
+    plt.tight_layout()
+    fig.savefig(os.path.join(CHARTS_DIR, '10_customer_material_heatmap.png'), dpi=150)
+    plt.close(fig)
+    print("  → 10_customer_material_heatmap.png")
 
 
 # ============================================================
